@@ -1,15 +1,22 @@
 const { invoke } = window.__TAURI__.core;
 const times = ["08:00", "08:40", "09:20", "10:00", "10:40", "11:20", "12:00", "12:40", "13:20", "14:00", "14:40"];
 
+// Инициализация чипов даты и времени
 function init() {
   const dGrid = document.querySelector("#date-btns");
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 16; i++) { // Увеличено до 16 дней
     let d = new Date(); 
     d.setDate(d.getDate() + i);
     let iso = d.toISOString().split('T')[0];
     let btn = document.createElement('div'); 
     btn.className = 'chip';
-    btn.innerHTML = `<span>${i === 0 ? "Сегодня" : d.toLocaleDateString('ru-RU', {day:'numeric', month:'short'})}</span>`;
+    
+    let label;
+    if (i === 0) label = "Сегодня";
+    else if (i === 1) label = "Завтра";
+    else label = d.toLocaleDateString('ru-RU', {day:'numeric', month:'short'});
+    
+    btn.innerHTML = `<span>${label}</span>`;
     btn.onclick = () => {
       document.querySelectorAll('#date-btns .chip').forEach(c => c.classList.remove('active'));
       btn.classList.add('active'); 
@@ -32,7 +39,8 @@ function init() {
   });
 }
 
-// Авторизация
+// ============ АВТОРИЗАЦИЯ ============
+
 function showAuthModal() {
   document.getElementById("auth-modal").style.display = "flex";
 }
@@ -41,7 +49,6 @@ function hideAuthModal() {
   document.getElementById("auth-modal").style.display = "none";
 }
 
-// Переключение вкладок авторизации
 const tabLogin = document.getElementById("tab-login");
 const tabRegister = document.getElementById("tab-register");
 
@@ -59,7 +66,8 @@ tabRegister.onclick = () => {
   tabLogin.classList.add('btn-secondary');
 };
 
-// Управление сессией
+// ============ УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЕМ ============
+
 function getUser() {
   try { 
     return JSON.parse(localStorage.getItem("user")); 
@@ -74,13 +82,31 @@ function setUser(user) {
 }
 
 window.logout = function() {
-  localStorage.removeItem("user");
-  renderAccountPanel();
-  showAuthModal();
-  document.querySelector(".container").style.filter = "blur(8px)";
+  if (confirm("Вы уверены, что хотите выйти?")) {
+    localStorage.removeItem("user");
+    renderAccountPanel();
+    showAuthModal();
+    document.querySelector(".container").style.filter = "blur(8px)";
+    showToast("Вы вышли из системы", "");
+  }
 }
 
-// Панель аккаунта
+// НОВАЯ ФУНКЦИЯ: Сделать пользователя админом (для разработки)
+window.makeAdmin = async function() {
+  const user = getUser();
+  if (!user) return showToast("Войдите в систему", "danger");
+  
+  try {
+    await invoke("make_admin", { phone: user.phone });
+    user.role = "admin";
+    setUser(user);
+    showToast("Теперь вы администратор!", "success");
+    load();
+  } catch(err) {
+    showToast("Ошибка: " + err, "danger");
+  }
+}
+
 function renderAccountPanel() {
   const user = getUser();
   let panel = document.getElementById("account-panel");
@@ -97,56 +123,72 @@ function renderAccountPanel() {
     document.body.appendChild(panel);
   }
   
+  const adminBadge = user.role === "admin" ? 
+    `<button class='btn btn-sm' onclick='console.log("Admin ID: ${user.id}")' style='margin-top:0.5rem;opacity:0.7;'>ID: ${user.id}</button>` : "";
+  
   panel.innerHTML = `
     <div class='acc-name'>${user.name}</div>
     <div class='acc-role'>${user.role === "admin" ? "🔐 Администратор" : "👤 Работник"}</div>
     <div class='acc-phone'>${user.phone}</div>
+    ${adminBadge}
     <button class='acc-logout' onclick='window.logout()'>Выйти</button>
   `;
 }
 
 renderAccountPanel();
 
-// Скрыть блюр при входе
 function hideBlur() {
   document.querySelector(".container").style.filter = "none";
   renderAccountPanel();
 }
 
-// Форма входа
+// ============ ФОРМЫ АВТОРИЗАЦИИ ============
+
 const loginForm = document.getElementById("login-form");
 loginForm.onsubmit = async (e) => {
   e.preventDefault();
-  const phone = document.getElementById("login-phone").value;
+  const phone = document.getElementById("login-phone").value.trim();
   const password = document.getElementById("login-password").value;
+  
+  if (!phone || !password) {
+    return showToast("Заполните все поля!", "danger");
+  }
   
   try {
     const user = await invoke("login_user", { phone, password });
     setUser(user); 
     hideAuthModal(); 
-    showToast("Вход выполнен!", "success");
+    showToast(`Добро пожаловать, ${user.name}!`, "success");
     hideBlur();
-    load();
+    await load();
   } catch (err) {
-    showToast("Ошибка входа: " + err, "danger");
+    showToast("" + err, "danger");
   }
 };
 
-// Форма регистрации
 const regForm = document.getElementById("register-form");
 regForm.onsubmit = async (e) => {
   e.preventDefault();
-  const name = document.getElementById("reg-name").value;
-  const phone = document.getElementById("reg-phone").value;
+  const name = document.getElementById("reg-name").value.trim();
+  const phone = document.getElementById("reg-phone").value.trim();
   const password = document.getElementById("reg-password").value;
+  
+  if (!name || !phone || !password) {
+    return showToast("Заполните все поля!", "danger");
+  }
+  
+  if (password.length < 4) {
+    return showToast("Пароль должен содержать минимум 4 символа", "danger");
+  }
   
   try {
     await invoke("register_user", { name, phone, password });
     showToast("Регистрация успешна! Теперь войдите.", "success");
+    document.getElementById("login-phone").value = phone;
     tabLogin.click();
     hideBlur();
   } catch (err) {
-    showToast("Ошибка регистрации: " + err, "danger");
+    showToast("" + err, "danger");
   }
 };
 
@@ -159,43 +201,82 @@ if (!getUser()) {
   document.querySelector(".container").style.filter = "none";
 }
 
-// Умная проверка истории клиента
-document.querySelector("#phone").onblur = async (e) => {
-  const phone = e.target.value;
-  if (phone.length < 12) return;
+// ============ ПРОВЕРКА ИСТОРИИ КЛИЕНТА ============
+
+let historyCheckTimeout;
+document.querySelector("#phone").oninput = (e) => {
+  clearTimeout(historyCheckTimeout);
+  const alertBox = document.querySelector("#history-alert");
   
-  try {
-    const history = await invoke("check_client_history", { phone });
-    const alertBox = document.querySelector("#history-alert");
-    
-    if (history.last_name) {
-      if (!document.querySelector("#name").value) {
-        document.querySelector("#name").value = history.last_name;
-      }
-      alertBox.style.display = "block";
-      
-      if (history.missed > 0) {
-        alertBox.className = "alert alert-danger";
-        alertBox.innerHTML = `⚠️ <strong>ПРОГУЛЬЩИК!</strong> Пропусков: ${history.missed}`;
-      } else {
-        alertBox.className = "alert alert-success";
-        alertBox.innerHTML = `✅ <strong>Постоянный клиент</strong> (${history.attended} визитов)`;
-      }
-    } else { 
-      alertBox.style.display = "none"; 
+  historyCheckTimeout = setTimeout(async () => {
+    const phone = e.target.value.trim();
+    if (phone.length < 10) {
+      alertBox.style.display = "none";
+      return;
     }
-  } catch(err) {
-    console.error("История клиента:", err);
-  }
+    
+    try {
+      const history = await invoke("check_client_history", { phone });
+      
+      if (history.last_name) {
+        if (!document.querySelector("#name").value) {
+          document.querySelector("#name").value = history.last_name;
+        }
+        alertBox.style.display = "block";
+        
+        if (history.missed > 0) {
+          alertBox.className = "alert alert-danger";
+          alertBox.innerHTML = `⚠️ <strong>ВНИМАНИЕ!</strong> Пропусков: ${history.missed}, Посещений: ${history.attended}`;
+        } else if (history.attended > 0) {
+          alertBox.className = "alert alert-success";
+          alertBox.innerHTML = `✅ <strong>Постоянный клиент</strong> — ${history.attended} ${history.attended === 1 ? 'визит' : history.attended < 5 ? 'визита' : 'визитов'}`;
+        }
+      } else { 
+        alertBox.style.display = "none"; 
+      }
+    } catch(err) {
+      console.error("История клиента:", err);
+    }
+  }, 500); // Debounce 500ms
 };
 
-// Поиск
+// ============ ПОИСК И ФИЛЬТРАЦИЯ ============
+
+let searchTimeout;
 document.querySelector("#search-input").oninput = (e) => {
-  const term = e.target.value.toLowerCase();
-  document.querySelectorAll(".booking-card").forEach(card => {
-    card.style.display = card.innerText.toLowerCase().includes(term) ? "flex" : "none";
-  });
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    const term = e.target.value.toLowerCase().trim();
+    const cards = document.querySelectorAll(".booking-card");
+    let visibleCount = 0;
+    
+    cards.forEach(card => {
+      const isVisible = !term || card.innerText.toLowerCase().includes(term);
+      card.style.display = isVisible ? "flex" : "none";
+      if (isVisible) visibleCount++;
+    });
+    
+    // Показать сообщение если ничего не найдено
+    updateNoResultsMessage(visibleCount === 0 && term.length > 0);
+  }, 300);
 };
+
+function updateNoResultsMessage(show) {
+  let msg = document.getElementById("no-results-msg");
+  
+  if (show) {
+    if (!msg) {
+      msg = document.createElement("div");
+      msg.id = "no-results-msg";
+      msg.className = "alert alert-warning";
+      msg.style.display = "block";
+      msg.innerHTML = "🔍 Ничего не найдено. Попробуйте изменить запрос.";
+      document.querySelector("#list").appendChild(msg);
+    }
+  } else {
+    if (msg) msg.remove();
+  }
+}
 
 // Toast уведомления
 function showToast(msg, type = "") {
@@ -210,16 +291,22 @@ function showToast(msg, type = "") {
   setTimeout(() => { toast.className = ""; }, 3000);
 }
 
-// Фильтрация по статусу
-const statusFilter = ["Все", "attended", "missed", "pending"];
+// ============ ФИЛЬТРАЦИЯ ПО СТАТУСУ ============
+
+const statusFilter = ["Все", "pending", "attended", "missed"];
 const filterBar = document.createElement("div");
 filterBar.className = "filter-bar";
 
 statusFilter.forEach(s => {
   const chip = document.createElement("div");
   chip.className = "chip";
-  const label = s === "Все" ? "Все" : (s === "attended" ? "✅ Посетили" : s === "missed" ? "❌ Пропустили" : "⏳ Ожидают");
-  chip.innerHTML = `<span>${label}</span>`;
+  const labels = {
+    "Все": "📋 Все",
+    "pending": "⏳ Ожидают",
+    "attended": "✅ Посетили",
+    "missed": "❌ Пропустили"
+  };
+  chip.innerHTML = `<span>${labels[s]}</span>`;
   chip.onclick = () => {
     document.querySelectorAll(".filter-bar .chip").forEach(c => c.classList.remove('active'));
     chip.classList.add('active');
@@ -232,40 +319,47 @@ document.querySelector(".card:nth-child(2) .search-wrapper").after(filterBar);
 filterBar.firstChild.classList.add("active");
 
 function filterBookings(status) {
-  document.querySelectorAll(".booking-card").forEach(card => {
-    if (status === "Все") {
-      card.style.display = "flex";
-    } else {
-      card.style.display = card.classList.contains(`card-${status}`) ? "flex" : "none";
-    }
+  const cards = document.querySelectorAll(".booking-card");
+  let visibleCount = 0;
+  
+  cards.forEach(card => {
+    const isVisible = status === "Все" || card.classList.contains(`card-${status}`);
+    card.style.display = isVisible ? "flex" : "none";
+    if (isVisible) visibleCount++;
   });
+  
+  updateNoResultsMessage(visibleCount === 0 && status !== "Все");
 }
 
-// Обновление статуса
+// ============ ОПЕРАЦИИ С ЗАПИСЯМИ ============
+
 window.updateStatus = async (id, status) => {
   try {
     await invoke("update_status", { id, status });
-    showToast("Статус обновлен!", status === "attended" ? "success" : status === "missed" ? "danger" : "");
-    load();
+    const statusLabels = {
+      attended: "посетил",
+      missed: "пропустил",
+      pending: "ожидает"
+    };
+    showToast(`Клиент ${statusLabels[status]}`, status === "attended" ? "success" : status === "missed" ? "danger" : "");
+    await load();
   } catch(err) {
-    showToast("Ошибка: " + err, "danger");
+    showToast("" + err, "danger");
   }
 };
 
-// Удаление записи
 window.del = async (id) => {
-  if(confirm("Вы уверены, что хотите удалить эту запись?")) {
+  if(confirm("Удалить эту запись? Действие необратимо.")) {
     try {
       await invoke("delete_booking", {id});
       showToast("Запись удалена", "danger");
-      load();
+      await load();
     } catch(err) {
-      showToast("Ошибка удаления: " + err, "danger");
+      showToast("" + err, "danger");
     }
   }
 };
 
-// Открытие модального окна редактирования
 window.openEdit = async (id) => {
   try {
     const bookings = await invoke("get_bookings");
@@ -283,31 +377,69 @@ window.openEdit = async (id) => {
     document.getElementById("edit-status").value = b.status;
     document.getElementById("edit-modal").style.display = "flex";
   } catch(err) {
-    showToast("Ошибка: " + err, "danger");
+    showToast("" + err, "danger");
   }
 };
 
-// История работника
 window.showWorkerHistory = async (workerId, workerName) => {
   try {
     const bookings = await invoke("get_worker_history", { workerId: workerId });
     
-    let html = `<h3 style="margin-bottom: 1rem;">📊 Клиенты работника: ${workerName}</h3>`;
+    const stats = {
+      total: bookings.length,
+      attended: bookings.filter(b => b.status === 'attended').length,
+      missed: bookings.filter(b => b.status === 'missed').length,
+      bought: bookings.filter(b => b.bought).length
+    };
+    
+    let html = `
+      <h3 style="margin-bottom: 1rem;">📊 История: ${workerName}</h3>
+      <div class="stats-grid" style="margin-bottom: 1.5rem;">
+        <div class="stat-card">
+          <div class="stat-label">Всего</div>
+          <div class="stat-value">${stats.total}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Посещено</div>
+          <div class="stat-value success">${stats.attended}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Пропущено</div>
+          <div class="stat-value danger">${stats.missed}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Купили</div>
+          <div class="stat-value warning">${stats.bought}</div>
+        </div>
+      </div>
+    `;
     
     if (bookings.length === 0) {
-      html += '<div class="alert alert-warning" style="display:block;">Нет записей</div>';
+      html += '<div class="alert alert-warning" style="display:block;">📝 Пока нет записей</div>';
     } else {
       html += bookings.map(b => {
         const sClass = b.status === 'attended' ? 'card-attended' : (b.status === 'missed' ? 'card-missed' : '');
         return `
           <div class='booking-card ${sClass}' style="margin-bottom: 0.75rem;">
             <div class='booking-info'>
-              <div class='booking-name'>${b.name}</div>
+              <div class='booking-name'>
+                ${b.name}
+                ${b.bought ? '<span class="badge badge-gold">💰</span>' : ''}
+              </div>
               <div class='booking-phone'>${b.phone}</div>
-              <div class='booking-date'>${new Date(b.date).toLocaleString('ru-RU', {day:'numeric', month:'short', hour:'2-digit', minute:'2-digit'})}</div>
+              <div class='booking-date'>${new Date(b.date).toLocaleString('ru-RU', {
+                day:'numeric', 
+                month:'long', 
+                hour:'2-digit', 
+                minute:'2-digit'
+              })}</div>
             </div>
             <div class='booking-meta'>
-              <span class='badge ${b.status === "attended" ? "badge-success" : b.status === "missed" ? "badge-danger" : "badge-warning"}'>
+              <span class='badge ${b.status === "attended" ? "badge-gold" : b.status === "missed" ? "badge-danger" : "badge-warning"}' style='${
+                b.status === "attended" ? "background: var(--success-bg); color: var(--success);" : 
+                b.status === "missed" ? "background: var(--danger-bg); color: var(--danger);" : 
+                "background: var(--warning-bg); color: var(--warning);"
+              }'>
                 ${b.status === "attended" ? "✅ Посетил" : b.status === "missed" ? "❌ Пропустил" : "⏳ Ожидает"}
               </span>
             </div>
@@ -323,7 +455,7 @@ window.showWorkerHistory = async (workerId, workerName) => {
       modal.className = 'modal';
       modal.style.display = 'flex';
       modal.innerHTML = `
-        <div class='modal-content' style='max-width: 700px; max-height: 80vh; overflow-y: auto;'>
+        <div class='modal-content' style='max-width: 800px; max-height: 80vh; overflow-y: auto;'>
           <button onclick='document.getElementById("worker-history-modal").remove()' class='modal-close'>✖</button>
           <div id='worker-history-content'></div>
         </div>
@@ -335,40 +467,47 @@ window.showWorkerHistory = async (workerId, workerName) => {
     
     document.getElementById('worker-history-content').innerHTML = html;
   } catch(err) {
-    showToast("Ошибка загрузки истории: " + err, "danger");
+    showToast("" + err, "danger");
   }
 };
 
-// Загрузка данных
+// ============ ЗАГРУЗКА ДАННЫХ ============
+
 async function load() {
   try {
     const user = getUser();
-    let bookings = await invoke("get_bookings");
+    if (!user) return;
+    
+    const bookings = await invoke("get_bookings");
     let workers = {};
     
-    // Удаляем старую статистику работников
     const oldWorkerStats = document.querySelector(".worker-stats-container");
     if (oldWorkerStats) oldWorkerStats.remove();
     
-    // Статистика для админа
-    if (user && user.role === "admin") {
+    // Админская панель
+    if (user.role === "admin") {
       const workerList = await invoke("get_workers");
       workerList.forEach(w => { workers[w.id] = w.name; });
       
       const workerStats = document.createElement("div");
       workerStats.className = "stats-grid worker-stats-container";
-      workerStats.innerHTML = workerList.map(w => `
-        <div class='stat-card'>
-          <div class='stat-label'>${w.name}</div>
-          <div class='stat-value' style='font-size: 1rem; margin-bottom: 0.5rem;'>${w.phone}</div>
-          <small style='color: var(--text-dim); display: block; margin-bottom: 0.75rem;'>
-            Регистрация: ${new Date(w.registered_at).toLocaleDateString('ru-RU')}
-          </small>
-          <button class='btn btn-sm' onclick='showWorkerHistory(${w.id}, "${w.name}")'>
-            <span>📊 История</span>
-          </button>
-        </div>
-      `).join("");
+      workerStats.innerHTML = workerList.map(w => {
+        const workerBookings = bookings.filter(b => b.created_by === w.id);
+        const workerTotal = workerBookings.length;
+        
+        return `
+          <div class='stat-card'>
+            <div class='stat-label'>${w.name}</div>
+            <div class='stat-value' style='font-size: 1rem; margin-bottom: 0.5rem;'>${w.phone}</div>
+            <small style='color: var(--text-dim); display: block; margin-bottom: 0.5rem;'>
+              ${workerTotal} ${workerTotal === 1 ? 'запись' : workerTotal < 5 ? 'записи' : 'записей'}
+            </small>
+            <button class='btn btn-sm' onclick='showWorkerHistory(${w.id}, "${w.name}")' style='width:100%;'>
+              <span>📊 Подробнее</span>
+            </button>
+          </div>
+        `;
+      }).join("");
       
       const statsElement = document.getElementById("stats");
       statsElement.parentNode.insertBefore(workerStats, statsElement);
@@ -378,6 +517,7 @@ async function load() {
     const total = bookings.length;
     const attended = bookings.filter(b => b.status === 'attended').length;
     const missed = bookings.filter(b => b.status === 'missed').length;
+    const pending = bookings.filter(b => b.status === 'pending').length;
     const bought = bookings.filter(b => b.bought).length;
     
     document.getElementById("stats").innerHTML = `
@@ -386,11 +526,15 @@ async function load() {
         <div class="stat-value">${total}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Посещено</div>
+        <div class="stat-label">Ожидают</div>
+        <div class="stat-value" style="color: var(--warning);">${pending}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Посетили</div>
         <div class="stat-value success">${attended}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Пропущено</div>
+        <div class="stat-label">Пропустили</div>
         <div class="stat-value danger">${missed}</div>
       </div>
       <div class="stat-card">
@@ -400,57 +544,78 @@ async function load() {
     `;
     
     // Список записей
-    document.querySelector("#list").innerHTML = bookings.map(b => {
-      let sClass = b.status === 'attended' ? 'card-attended' : (b.status === 'missed' ? 'card-missed' : '');
-      let creator = b.created_by && workers[b.created_by] ? 
-        `<div class='booking-creator'>Добавил: ${workers[b.created_by]}</div>` : "";
-      
-      return `
-        <div class="booking-card ${sClass}">
-          <div class='booking-info'>
-            <div class='booking-name'>
-              ${b.name}
-              ${b.bought ? '<span class="badge badge-gold">💰 Купил массажер</span>' : ''}
-            </div>
-            <div class='booking-phone'>${b.phone}</div>
-            ${creator}
-            <div class='booking-actions'>
-              <button class="btn-icon success" onclick="updateStatus(${b.id}, 'attended')" title="Посетил">✅</button>
-              <button class="btn-icon danger" onclick="updateStatus(${b.id}, 'missed')" title="Пропустил">❌</button>
-              <button class="btn-icon" onclick="openEdit(${b.id})" title="Редактировать">✏️</button>
-              <button class="btn-icon danger" onclick="del(${b.id})" title="Удалить">🗑️</button>
-            </div>
-          </div>
-          <div class='booking-meta'>
-            <div class='booking-date'>
-              ${new Date(b.date).toLocaleString('ru-RU', {
-                day:'numeric', 
-                month:'short', 
-                hour:'2-digit', 
-                minute:'2-digit'
-              })}
-            </div>
-          </div>
+    if (bookings.length === 0) {
+      document.querySelector("#list").innerHTML = `
+        <div class="alert alert-warning" style="display:block; text-align:center;">
+          📝 Пока нет записей. Создайте первую запись!
         </div>
       `;
-    }).join('');
+    } else {
+      document.querySelector("#list").innerHTML = bookings.map(b => {
+        let sClass = '';
+        if (b.status === 'attended') sClass = 'card-attended';
+        else if (b.status === 'missed') sClass = 'card-missed';
+        else sClass = 'card-pending';
+        
+        let creator = b.created_by && workers[b.created_by] ? 
+          `<div class='booking-creator'>👤 ${workers[b.created_by]}</div>` : "";
+        
+        const bookingDate = new Date(b.date);
+        const now = new Date();
+        const isPast = bookingDate < now;
+        const isToday = bookingDate.toDateString() === now.toDateString();
+        
+        let dateLabel = "";
+        if (isToday) dateLabel = " (сегодня)";
+        else if (isPast && b.status === 'pending') dateLabel = " (просрочено)";
+        
+        return `
+          <div class="booking-card ${sClass}">
+            <div class='booking-info'>
+              <div class='booking-name'>
+                ${b.name}
+                ${b.bought ? '<span class="badge badge-gold">💰 Купил массажер</span>' : ''}
+              </div>
+              <div class='booking-phone'>📞 ${b.phone}</div>
+              ${creator}
+              <div class='booking-actions'>
+                <button class="btn-icon success" onclick="updateStatus(${b.id}, 'attended')" title="Посетил">✅</button>
+                <button class="btn-icon danger" onclick="updateStatus(${b.id}, 'missed')" title="Пропустил">❌</button>
+                <button class="btn-icon" onclick="openEdit(${b.id})" title="Редактировать">✏️</button>
+                <button class="btn-icon danger" onclick="del(${b.id})" title="Удалить">🗑️</button>
+              </div>
+            </div>
+            <div class='booking-meta'>
+              <div class='booking-date'>
+                📅 ${bookingDate.toLocaleString('ru-RU', {
+                  day:'numeric', 
+                  month:'short', 
+                  hour:'2-digit', 
+                  minute:'2-digit'
+                })}${dateLabel}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
   } catch(err) {
-    showToast("Ошибка загрузки данных: " + err, "danger");
+    showToast("Ошибка загрузки: " + err, "danger");
     console.error(err);
   }
 }
 
-// Закрытие модального окна редактирования
+// ============ ОБРАБОТЧИКИ ФОРМ ============
+
 document.getElementById("close-edit").onclick = () => {
   document.getElementById("edit-modal").style.display = "none";
 };
 
-// Форма редактирования
 document.getElementById("edit-form").onsubmit = async (e) => {
   e.preventDefault();
   const id = Number(document.getElementById("edit-id").value);
-  const name = document.getElementById("edit-name").value;
-  const phone = document.getElementById("edit-phone").value;
+  const name = document.getElementById("edit-name").value.trim();
+  const phone = document.getElementById("edit-phone").value.trim();
   const date = document.getElementById("edit-date").value;
   const time = document.getElementById("edit-time").value;
   const bought = document.getElementById("edit-bought").checked ? 1 : 0;
@@ -468,19 +633,18 @@ document.getElementById("edit-form").onsubmit = async (e) => {
     });
     showToast("Запись обновлена!", "success");
     document.getElementById("edit-modal").style.display = "none";
-    load();
+    await load();
   } catch(err) {
-    showToast("Ошибка редактирования: " + err, "danger");
+    showToast("" + err, "danger");
   }
 };
 
-// Форма создания записи
 document.querySelector("#booking-form").onsubmit = async (e) => {
   e.preventDefault();
   const user = getUser();
   
   if (!user || !user.id) {
-    showToast("Ошибка: вы не авторизованы!", "danger");
+    showToast("Войдите в систему!", "danger");
     showAuthModal();
     document.querySelector(".container").style.filter = "blur(8px)";
     return;
@@ -488,8 +652,8 @@ document.querySelector("#booking-form").onsubmit = async (e) => {
   
   const date = document.querySelector("#final-date").value;
   const time = document.querySelector("#final-time").value;
-  const name = document.querySelector("#name").value;
-  const phone = document.querySelector("#phone").value;
+  const name = document.querySelector("#name").value.trim();
+  const phone = document.querySelector("#phone").value.trim();
   
   if (!date || !time) return showToast("Выберите дату и время!", "danger");
   if (!name || !phone) return showToast("Заполните имя и телефон!", "danger");
@@ -503,7 +667,7 @@ document.querySelector("#booking-form").onsubmit = async (e) => {
       createdBy: user.id
     });
     
-    showToast("Запись добавлена!", "success");
+    showToast("✅ Запись успешно создана!", "success");
     
     // Очистка формы
     document.querySelector("#name").value = "";
@@ -514,14 +678,27 @@ document.querySelector("#booking-form").onsubmit = async (e) => {
     document.querySelectorAll('.chip.active').forEach(c => c.classList.remove('active'));
     document.querySelector("#history-alert").style.display = "none";
     
-    load();
+    await load();
   } catch(err) {
-    showToast("Ошибка добавления записи: " + err, "danger");
+    showToast("" + err, "danger");
   }
 };
 
-// Инициализация при загрузке
+// ============ ИНИЦИАЛИЗАЦИЯ ============
+
 document.addEventListener('DOMContentLoaded', () => {
   init();
-  load();
+  if (getUser()) load();
+  
+  // Горячие клавиши
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+K - фокус на поиск
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      document.querySelector("#search-input").focus();
+    }
+  });
+  
+  console.log("🌟 Massage CRM Pro загружена");
+  console.log("💡 Совет: для получения прав админа используйте: makeAdmin()");
 });
