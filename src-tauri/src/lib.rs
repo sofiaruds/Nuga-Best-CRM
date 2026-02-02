@@ -1,7 +1,9 @@
 use serde::{Serialize, Deserialize};
 use rusqlite::{Connection, Result};
 use std::sync::Mutex;
+use bcrypt::{hash, verify, DEFAULT_COST};
 use sha2::{Sha256, Digest};
+use tauri::Manager;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Booking {
@@ -43,6 +45,25 @@ struct AppState {
     db: Mutex<Connection>,
 }
 
+fn hash_password(password: &str) -> Result<String, String> {
+    hash(password, DEFAULT_COST).map_err(|e| format!("Ошибка хеширования пароля: {}", e))
+}
+
+fn verify_password(password: &str, password_hash: &str) -> Result<bool, String> {
+    verify(password, password_hash).map_err(|e| format!("Ошибка проверки пароля: {}", e))
+}
+
+fn is_legacy_sha256_hash(password_hash: &str) -> bool {
+    password_hash.len() == 64 && password_hash.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn verify_legacy_sha256(password: &str, password_hash: &str) -> bool {
+    let mut hasher = Sha256::new();
+    hasher.update(password.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    hash == password_hash
+}
+
 // Проверка истории клиента
 #[tauri::command]
 fn check_client_history(state: tauri::State<AppState>, phone: String) -> Result<ClientHistory, String> {
@@ -75,7 +96,7 @@ fn save_booking(
     phone: String, 
     date: String, 
     bought: i32, 
-    created_by: i32
+    created_by: Option<i32>
 ) -> Result<String, String> {
     // Валидация данных
     if name.trim().is_empty() {
@@ -90,6 +111,20 @@ fn save_booking(
 
     let db = state.db.lock().unwrap();
     
+    // Проверка, что пользователь существует (если передан id)
+    if let Some(user_id) = created_by {
+        let exists: Result<i32, _> = db.query_row(
+            "SELECT COUNT(*) FROM users WHERE id = ?1",
+            [user_id],
+            |row| row.get(0),
+        );
+        if let Ok(count) = exists {
+            if count == 0 {
+                return Err("Пользователь не найден".to_string());
+            }
+        }
+    }
+
     // Проверка на дубликаты (один и тот же человек в одно время)
     let exists: Result<i32, _> = db.query_row(
         "SELECT COUNT(*) FROM bookings WHERE phone = ?1 AND date = ?2 AND status = 'pending'",
@@ -250,14 +285,11 @@ fn register_user(
         }
     }
     
-    // Хеширование пароля
-    let mut hasher = Sha256::new();
-    hasher.update(password.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
+    let password_hash = hash_password(&password)?;
     
     db.execute(
         "INSERT INTO users (name, phone, password_hash, role) VALUES (?1, ?2, ?3, 'worker')",
-        (&name.trim(), &phone.trim(), &hash),
+        (&name.trim(), &phone.trim(), &password_hash),
     ).map_err(|e| format!("Ошибка регистрации: {}", e))?;
     
     Ok("Регистрация успешна".into())
@@ -276,26 +308,48 @@ fn login_user(
     
     let db = state.db.lock().unwrap();
     
-    // Хеширование пароля
-    let mut hasher = Sha256::new();
-    hasher.update(password.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
+    let (user, user_id, password_hash) = {
+        let mut stmt = db.prepare(
+            "SELECT id, name, phone, role, registered_at, password_hash
+             FROM users 
+             WHERE phone = ?1"
+        ).map_err(|e| format!("Ошибка SQL: {}", e))?;
+        
+        stmt.query_row((&phone.trim(),), |row| {
+            let user_id: i32 = row.get(0)?;
+            Ok((
+                User {
+                    id: Some(user_id),
+                    name: row.get(1)?,
+                    phone: row.get(2)?,
+                    role: row.get(3)?,
+                    registered_at: row.get(4)?,
+                },
+                user_id,
+                row.get::<_, String>(5)?,
+            ))
+        }).map_err(|_| "Неверный телефон или пароль".to_string())?
+    };
     
-    let mut stmt = db.prepare(
-        "SELECT id, name, phone, role, registered_at 
-         FROM users 
-         WHERE phone = ?1 AND password_hash = ?2"
-    ).map_err(|e| format!("Ошибка SQL: {}", e))?;
-    
-    let user = stmt.query_row((&phone.trim(), &hash), |row| {
-        Ok(User {
-            id: Some(row.get(0)?),
-            name: row.get(1)?,
-            phone: row.get(2)?,
-            role: row.get(3)?,
-            registered_at: row.get(4)?,
-        })
-    }).map_err(|_| "Неверный телефон или пароль".to_string())?;
+    let is_valid = if password_hash.starts_with("$2") {
+        verify_password(&password, &password_hash)?
+    } else if is_legacy_sha256_hash(&password_hash) {
+        let legacy_ok = verify_legacy_sha256(&password, &password_hash);
+        if legacy_ok {
+            let new_hash = hash_password(&password)?;
+            db.execute(
+                "UPDATE users SET password_hash = ?1 WHERE id = ?2",
+                (&new_hash, &user_id),
+            ).map_err(|e| format!("Ошибка обновления пароля: {}", e))?;
+        }
+        legacy_ok
+    } else {
+        false
+    };
+
+    if !is_valid {
+        return Err("Неверный телефон или пароль".to_string());
+    }
     
     Ok(user)
 }
@@ -393,6 +447,10 @@ fn get_statistics(state: tauri::State<AppState>) -> Result<Statistics, String> {
 // НОВАЯ ФУНКЦИЯ: Сделать пользователя админом (для отладки)
 #[tauri::command]
 fn make_admin(state: tauri::State<AppState>, phone: String) -> Result<String, String> {
+    if !cfg!(debug_assertions) && std::env::var("ALLOW_MAKE_ADMIN").ok().as_deref() != Some("1") {
+        return Err("Команда отключена в релизе".to_string());
+    }
+
     let db = state.db.lock().unwrap();
     
     let rows_affected = db.execute(
@@ -408,55 +466,70 @@ fn make_admin(state: tauri::State<AppState>, phone: String) -> Result<String, St
 }
 
 pub fn run() {
-    let conn = Connection::open("database.db").expect("Ошибка открытия базы данных");
-    
-    // Создание таблицы пользователей
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            phone TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'worker',
-            registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )",
-        [],
-    ).expect("Ошибка создания таблицы users");
-    
-    // Создание таблицы бронирований
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS bookings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            phone TEXT NOT NULL,
-            date DATETIME NOT NULL,
-            bought INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'pending',
-            created_by INTEGER,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
-        )",
-        [],
-    ).expect("Ошибка создания таблицы bookings");
-    
-    // Создание индексов для оптимизации
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_bookings_phone ON bookings(phone)",
-        [],
-    ).ok();
-    
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date)",
-        [],
-    ).ok();
-    
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status)",
-        [],
-    ).ok();
-
     tauri::Builder::default()
-        .manage(AppState { db: Mutex::new(conn) })
+        .setup(|app| -> std::result::Result<(), Box<dyn std::error::Error>> {
+            let app_data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&app_data_dir)?;
+            let db_path = app_data_dir.join("database.db");
+            let conn = Connection::open(db_path)?;
+
+            conn.execute("PRAGMA foreign_keys = ON", [])?;
+
+            // Создание таблицы пользователей
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    phone TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'worker',
+                    registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )",
+                [],
+            )?;
+            
+            // Создание таблицы бронирований
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS bookings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    phone TEXT NOT NULL,
+                    date DATETIME NOT NULL,
+                    bought INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'pending',
+                    created_by INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL
+                )",
+                [],
+            )?;
+            
+            // Создание индексов для оптимизации
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bookings_phone ON bookings(phone)",
+                [],
+            ).ok();
+            
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bookings_date ON bookings(date)",
+                [],
+            ).ok();
+            
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status)",
+                [],
+            ).ok();
+
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_unique_pending 
+                 ON bookings(phone, date) 
+                 WHERE status = 'pending'",
+                [],
+            )?;
+
+            app.manage(AppState { db: Mutex::new(conn) });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             save_booking, 
             get_bookings, 

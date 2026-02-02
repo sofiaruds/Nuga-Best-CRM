@@ -1,5 +1,6 @@
 const { invoke } = window.__TAURI__.core;
 const times = ["08:00", "08:40", "09:20", "10:00", "10:40", "11:20", "12:00", "12:40", "13:20", "14:00", "14:40"];
+const scheduleCapacity = 22;
 
 // Инициализация чипов даты и времени
 function init() {
@@ -49,6 +50,11 @@ function hideAuthModal() {
   document.getElementById("auth-modal").style.display = "none";
 }
 
+function setBlur(enabled) {
+  const main = document.querySelector(".main");
+  if (main) main.style.filter = enabled ? "blur(8px)" : "none";
+}
+
 const tabLogin = document.getElementById("tab-login");
 const tabRegister = document.getElementById("tab-register");
 
@@ -86,7 +92,7 @@ window.logout = function() {
     localStorage.removeItem("user");
     renderAccountPanel();
     showAuthModal();
-    document.querySelector(".container").style.filter = "blur(8px)";
+    setBlur(true);
     showToast("Вы вышли из системы", "");
   }
 }
@@ -120,17 +126,18 @@ function renderAccountPanel() {
     panel = document.createElement("div");
     panel.id = "account-panel";
     panel.className = "account-panel";
-    document.body.appendChild(panel);
+    const host = document.getElementById("sidebar-account");
+    if (host) {
+      host.appendChild(panel);
+    } else {
+      document.body.appendChild(panel);
+    }
   }
-  
-  const adminBadge = user.role === "admin" ? 
-    `<button class='btn btn-sm' onclick='console.log("Admin ID: ${user.id}")' style='margin-top:0.5rem;opacity:0.7;'>ID: ${user.id}</button>` : "";
   
   panel.innerHTML = `
     <div class='acc-name'>${user.name}</div>
     <div class='acc-role'>${user.role === "admin" ? "🔐 Администратор" : "👤 Работник"}</div>
     <div class='acc-phone'>${user.phone}</div>
-    ${adminBadge}
     <button class='acc-logout' onclick='window.logout()'>Выйти</button>
   `;
 }
@@ -138,7 +145,7 @@ function renderAccountPanel() {
 renderAccountPanel();
 
 function hideBlur() {
-  document.querySelector(".container").style.filter = "none";
+  setBlur(false);
   renderAccountPanel();
 }
 
@@ -195,10 +202,10 @@ regForm.onsubmit = async (e) => {
 // Проверка сессии при загрузке
 if (!getUser()) {
   setTimeout(showAuthModal, 200);
-  document.querySelector(".container").style.filter = "blur(8px)";
+  setBlur(true);
 } else {
   hideAuthModal();
-  document.querySelector(".container").style.filter = "none";
+  setBlur(false);
 }
 
 // ============ ПРОВЕРКА ИСТОРИИ КЛИЕНТА ============
@@ -247,34 +254,92 @@ document.querySelector("#search-input").oninput = (e) => {
   clearTimeout(searchTimeout);
   searchTimeout = setTimeout(() => {
     const term = e.target.value.toLowerCase().trim();
-    const cards = document.querySelectorAll(".booking-card");
+    const rows = document.querySelectorAll("#schedule-body tr");
     let visibleCount = 0;
     
-    cards.forEach(card => {
-      const isVisible = !term || card.innerText.toLowerCase().includes(term);
-      card.style.display = isVisible ? "flex" : "none";
+    rows.forEach(row => {
+      const text = row.innerText.toLowerCase();
+      const isVisible = !term || text.includes(term);
+      row.style.display = isVisible ? "table-row" : "none";
       if (isVisible) visibleCount++;
     });
     
-    // Показать сообщение если ничего не найдено
-    updateNoResultsMessage(visibleCount === 0 && term.length > 0);
+    updateNoResultsMessage(visibleCount === 0 && term.length > 0, "🔍 Ничего не найдено. Попробуйте изменить запрос.");
   }, 300);
 };
 
-function updateNoResultsMessage(show) {
-  let msg = document.getElementById("no-results-msg");
-  
+// Поиск по клиентам
+const clientsSearch = document.getElementById("clients-search");
+if (clientsSearch) {
+  clientsSearch.oninput = (e) => {
+    const term = e.target.value.toLowerCase().trim();
+    const rows = document.querySelectorAll(".client-row");
+    let visibleCount = 0;
+    rows.forEach(row => {
+      const isVisible = !term || row.innerText.toLowerCase().includes(term);
+      row.style.display = isVisible ? "table-row" : "none";
+      if (isVisible) visibleCount++;
+    });
+    updateClientsEmpty(visibleCount === 0 && term.length > 0, "Ничего не найдено.");
+  };
+}
+
+const workersSearch = document.getElementById("workers-search");
+if (workersSearch) {
+  workersSearch.oninput = (e) => {
+    const term = e.target.value.toLowerCase().trim();
+    const rows = document.querySelectorAll(".worker-row");
+    let visibleCount = 0;
+    rows.forEach(row => {
+      const isVisible = !term || row.innerText.toLowerCase().includes(term);
+      row.style.display = isVisible ? "table-row" : "none";
+      if (isVisible) visibleCount++;
+    });
+    updateWorkersEmpty(visibleCount === 0 && term.length > 0, "Ничего не найдено.");
+  };
+}
+function updateNoResultsMessage(show, message) {
+  const empty = document.getElementById("list-empty");
+  if (!empty) return;
   if (show) {
-    if (!msg) {
-      msg = document.createElement("div");
-      msg.id = "no-results-msg";
-      msg.className = "alert alert-warning";
-      msg.style.display = "block";
-      msg.innerHTML = "🔍 Ничего не найдено. Попробуйте изменить запрос.";
-      document.querySelector("#list").appendChild(msg);
-    }
+    empty.style.display = "block";
+    empty.textContent = message || "Ничего не найдено.";
   } else {
-    if (msg) msg.remove();
+    empty.style.display = "none";
+  }
+}
+
+function updateScheduleLabel(dateStr) {
+  const label = document.getElementById("schedule-date-label");
+  if (!label) return;
+  const dt = new Date(dateStr + "T00:00:00");
+  label.textContent = dt.toLocaleDateString("ru-RU", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+}
+
+function updateClientsEmpty(show, message) {
+  const empty = document.getElementById("clients-empty");
+  if (!empty) return;
+  if (show) {
+    empty.style.display = "block";
+    empty.textContent = message || "Нет клиентов.";
+  } else {
+    empty.style.display = "none";
+  }
+}
+
+function updateWorkersEmpty(show, message) {
+  const empty = document.getElementById("workers-empty");
+  if (!empty) return;
+  if (show) {
+    empty.style.display = "block";
+    empty.textContent = message || "Нет сотрудников.";
+  } else {
+    empty.style.display = "none";
   }
 }
 
@@ -291,45 +356,7 @@ function showToast(msg, type = "") {
   setTimeout(() => { toast.className = ""; }, 3000);
 }
 
-// ============ ФИЛЬТРАЦИЯ ПО СТАТУСУ ============
-
-const statusFilter = ["Все", "pending", "attended", "missed"];
-const filterBar = document.createElement("div");
-filterBar.className = "filter-bar";
-
-statusFilter.forEach(s => {
-  const chip = document.createElement("div");
-  chip.className = "chip";
-  const labels = {
-    "Все": "📋 Все",
-    "pending": "⏳ Ожидают",
-    "attended": "✅ Посетили",
-    "missed": "❌ Пропустили"
-  };
-  chip.innerHTML = `<span>${labels[s]}</span>`;
-  chip.onclick = () => {
-    document.querySelectorAll(".filter-bar .chip").forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
-    filterBookings(s);
-  };
-  filterBar.appendChild(chip);
-});
-
-document.querySelector(".card:nth-child(2) .search-wrapper").after(filterBar);
-filterBar.firstChild.classList.add("active");
-
-function filterBookings(status) {
-  const cards = document.querySelectorAll(".booking-card");
-  let visibleCount = 0;
-  
-  cards.forEach(card => {
-    const isVisible = status === "Все" || card.classList.contains(`card-${status}`);
-    card.style.display = isVisible ? "flex" : "none";
-    if (isVisible) visibleCount++;
-  });
-  
-  updateNoResultsMessage(visibleCount === 0 && status !== "Все");
-}
+// ============ ФИЛЬТРАЦИЯ ПО СТАТУСУ (убрана, теперь расписание) ============
 
 // ============ ОПЕРАЦИИ С ЗАПИСЯМИ ============
 
@@ -471,6 +498,84 @@ window.showWorkerHistory = async (workerId, workerName) => {
   }
 };
 
+function showClientHistory(clientPhone, clientName, bookings) {
+  const clientBookings = bookings.filter(b => b.phone === clientPhone);
+  const stats = {
+    total: clientBookings.length,
+    attended: clientBookings.filter(b => b.status === 'attended').length,
+    missed: clientBookings.filter(b => b.status === 'missed').length,
+    bought: clientBookings.filter(b => b.bought).length
+  };
+
+  let html = `
+    <h3 style="margin-bottom: 1rem;">История клиента: ${clientName}</h3>
+    <div class="stats-grid" style="margin-bottom: 1.5rem;">
+      <div class="stat-card">
+        <div class="stat-label">Всего</div>
+        <div class="stat-value">${stats.total}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Посещено</div>
+        <div class="stat-value success">${stats.attended}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Пропущено</div>
+        <div class="stat-value danger">${stats.missed}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Покупки</div>
+        <div class="stat-value warning">${stats.bought}</div>
+      </div>
+    </div>
+  `;
+
+  if (clientBookings.length === 0) {
+    html += '<div class="alert alert-warning" style="display:block;">Записей пока нет</div>';
+  } else {
+    html += clientBookings.map(b => {
+      const sClass = b.status === 'attended' ? 'card-attended' : (b.status === 'missed' ? 'card-missed' : '');
+      return `
+        <div class='booking-card ${sClass}' style="margin-bottom: 0.75rem;">
+          <div class='booking-info'>
+            <div class='booking-name'>${b.name}</div>
+            <div class='booking-phone'>${b.phone}</div>
+            <div class='booking-date'>${new Date(b.date).toLocaleString('ru-RU', {
+              day:'numeric',
+              month:'long',
+              hour:'2-digit',
+              minute:'2-digit'
+            })}</div>
+          </div>
+          <div class='booking-meta'>
+            <span class='status ${b.status}'>${
+              b.status === "attended" ? "Посетил" : b.status === "missed" ? "Пропустил" : "Ожидает"
+            }</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  let modal = document.getElementById('client-history-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'client-history-modal';
+    modal.className = 'modal';
+    modal.style.display = 'flex';
+    modal.innerHTML = `
+      <div class='modal-content' style='max-width: 800px; max-height: 80vh; overflow-y: auto; position: relative;'>
+        <button onclick='document.getElementById(\"client-history-modal\").remove()' class='modal-close'>✖</button>
+        <div id='client-history-content'></div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  } else {
+    modal.style.display = 'flex';
+  }
+
+  document.getElementById('client-history-content').innerHTML = html;
+}
+
 // ============ ЗАГРУЗКА ДАННЫХ ============
 
 async function load() {
@@ -479,6 +584,7 @@ async function load() {
     if (!user) return;
     
     const bookings = await invoke("get_bookings");
+    window.__BOOKINGS_CACHE = bookings;
     let workers = {};
     
     const oldWorkerStats = document.querySelector(".worker-stats-container");
@@ -543,66 +649,283 @@ async function load() {
       </div>
     `;
     
-    // Список записей
-    if (bookings.length === 0) {
-      document.querySelector("#list").innerHTML = `
-        <div class="alert alert-warning" style="display:block; text-align:center;">
-          📝 Пока нет записей. Создайте первую запись!
-        </div>
-      `;
-    } else {
-      document.querySelector("#list").innerHTML = bookings.map(b => {
-        let sClass = '';
-        if (b.status === 'attended') sClass = 'card-attended';
-        else if (b.status === 'missed') sClass = 'card-missed';
-        else sClass = 'card-pending';
-        
-        let creator = b.created_by && workers[b.created_by] ? 
-          `<div class='booking-creator'>👤 ${workers[b.created_by]}</div>` : "";
-        
-        const bookingDate = new Date(b.date);
-        const now = new Date();
-        const isPast = bookingDate < now;
-        const isToday = bookingDate.toDateString() === now.toDateString();
-        
-        let dateLabel = "";
-        if (isToday) dateLabel = " (сегодня)";
-        else if (isPast && b.status === 'pending') dateLabel = " (просрочено)";
-        
-        return `
-          <div class="booking-card ${sClass}">
-            <div class='booking-info'>
-              <div class='booking-name'>
-                ${b.name}
-                ${b.bought ? '<span class="badge badge-gold">💰 Купил массажер</span>' : ''}
-              </div>
-              <div class='booking-phone'>📞 ${b.phone}</div>
-              ${creator}
-              <div class='booking-actions'>
-                <button class="btn-icon success" onclick="updateStatus(${b.id}, 'attended')" title="Посетил">✅</button>
-                <button class="btn-icon danger" onclick="updateStatus(${b.id}, 'missed')" title="Пропустил">❌</button>
-                <button class="btn-icon" onclick="openEdit(${b.id})" title="Редактировать">✏️</button>
-                <button class="btn-icon danger" onclick="del(${b.id})" title="Удалить">🗑️</button>
-              </div>
-            </div>
-            <div class='booking-meta'>
-              <div class='booking-date'>
-                📅 ${bookingDate.toLocaleString('ru-RU', {
-                  day:'numeric', 
-                  month:'short', 
-                  hour:'2-digit', 
-                  minute:'2-digit'
-                })}${dateLabel}
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
+    const scheduleInput = document.getElementById("schedule-date");
+    if (scheduleInput) {
+      if (!scheduleInput.value) {
+        scheduleInput.value = new Date().toISOString().split("T")[0];
+      }
+      updateScheduleLabel(scheduleInput.value);
+      renderSchedule(scheduleInput.value, bookings);
     }
+
+    await renderWorkers(bookings);
+    renderClients(bookings);
+    renderReports("day", bookings);
   } catch(err) {
     showToast("Ошибка загрузки: " + err, "danger");
     console.error(err);
   }
+}
+
+function renderSchedule(dateStr, bookings) {
+  const body = document.getElementById("schedule-body");
+  if (!body) return;
+
+  const dayBookings = bookings.filter(b => (b.date || "").startsWith(dateStr));
+  updateNoResultsMessage(dayBookings.length === 0, "На выбранный день записей нет.");
+
+  const byTime = new Map();
+  times.forEach(t => byTime.set(t, []));
+  dayBookings.forEach(b => {
+    const timePart = (b.date || "").split("T")[1]?.substring(0, 5);
+    if (byTime.has(timePart)) {
+      byTime.get(timePart).push(b);
+    }
+  });
+
+  body.innerHTML = times.map(t => {
+    const list = byTime.get(t) || [];
+    const cells = [];
+    for (let i = 0; i < scheduleCapacity; i += 1) {
+      const b = list[i];
+      if (b) {
+        cells.push(`<td><div class="slot filled">${b.name}</div></td>`);
+      } else {
+        cells.push(`<td><div class="slot"></div></td>`);
+      }
+    }
+    return `<tr><td>${t}</td>${cells.join("")}</tr>`;
+  }).join("");
+}
+
+function renderClients(bookings) {
+  const list = document.getElementById("clients-list");
+  if (!list) return;
+
+  const map = new Map();
+  bookings.forEach(b => {
+    const key = b.phone;
+    const existing = map.get(key);
+    const entry = existing || {
+      name: b.name,
+      phone: b.phone,
+      attended: 0,
+      missed: 0,
+      bought: 0,
+      lastVisit: null
+    };
+
+    if (b.status === "attended") entry.attended += 1;
+    if (b.status === "missed") entry.missed += 1;
+    if (b.bought) entry.bought += 1;
+
+    const dt = new Date(b.date);
+    if (!entry.lastVisit || dt > entry.lastVisit) {
+      entry.lastVisit = dt;
+      entry.name = b.name;
+    }
+    map.set(key, entry);
+  });
+
+  const clients = Array.from(map.values()).sort((a, b) => {
+    if (!a.lastVisit && !b.lastVisit) return 0;
+    if (!a.lastVisit) return 1;
+    if (!b.lastVisit) return -1;
+    return b.lastVisit - a.lastVisit;
+  });
+
+  if (clients.length === 0) {
+    list.innerHTML = "";
+    updateClientsEmpty(true, "Пока нет клиентов. Добавьте первую запись.");
+    return;
+  }
+
+  updateClientsEmpty(false);
+  list.innerHTML = clients.map(c => {
+    const last = c.lastVisit ? c.lastVisit.toLocaleString('ru-RU', {
+      day:'numeric',
+      month:'short',
+      hour:'2-digit',
+      minute:'2-digit'
+    }) : "—";
+    return `
+      <tr class="client-row">
+        <td><strong>${c.name}</strong></td>
+        <td>${c.phone}</td>
+        <td>${last}</td>
+        <td>${c.attended}</td>
+        <td>${c.missed}</td>
+        <td>${c.bought}</td>
+        <td>
+          <button class="btn btn-sm" onclick='showClientHistory(${JSON.stringify(c.phone)}, ${JSON.stringify(c.name)}, window.__BOOKINGS_CACHE)'>История</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  window.__BOOKINGS_CACHE = bookings;
+}
+
+async function renderWorkers(bookings) {
+  const list = document.getElementById("workers-list");
+  if (!list) return;
+
+  const workersSearch = document.getElementById("workers-search");
+  if (workersSearch) workersSearch.value = "";
+
+  let workers = [];
+  try {
+    workers = await invoke("get_workers");
+  } catch (err) {
+    updateWorkersEmpty(true, "Не удалось загрузить сотрудников.");
+    return;
+  }
+
+  if (!workers || workers.length === 0) {
+    list.innerHTML = "";
+    updateWorkersEmpty(true, "Пока нет сотрудников.");
+    return;
+  }
+
+  const statsByWorker = new Map();
+  workers.forEach(w => {
+    statsByWorker.set(w.id, {
+      total: 0,
+      attended: 0,
+      missed: 0,
+      bought: 0
+    });
+  });
+
+  bookings.forEach(b => {
+    if (!b.created_by || !statsByWorker.has(b.created_by)) return;
+    const s = statsByWorker.get(b.created_by);
+    s.total += 1;
+    if (b.status === "attended") s.attended += 1;
+    if (b.status === "missed") s.missed += 1;
+    if (b.bought) s.bought += 1;
+  });
+
+  updateWorkersEmpty(false);
+  list.innerHTML = workers.map(w => {
+    const s = statsByWorker.get(w.id) || { total: 0, attended: 0, missed: 0, bought: 0 };
+    return `
+      <tr class="worker-row">
+        <td><strong>${w.name}</strong></td>
+        <td>${w.phone}</td>
+        <td>${s.total}</td>
+        <td>${s.attended}</td>
+        <td>${s.missed}</td>
+        <td>${s.bought}</td>
+        <td>
+          <button class="btn btn-sm" onclick='showWorkerHistory(${w.id}, ${JSON.stringify(w.name)})'>История</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function renderReports(period, bookings) {
+  const summary = document.getElementById("reports-summary");
+  const list = document.getElementById("reports-list");
+  if (!summary || !list) return;
+
+  const now = new Date();
+  let start;
+  if (period === "day") {
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  } else if (period === "week") {
+    const day = (now.getDay() + 6) % 7;
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day);
+  } else {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+  }
+
+  const periodBookings = bookings.filter(b => {
+    const dt = new Date(b.date);
+    return dt >= start && dt <= now;
+  });
+
+  const totals = {
+    total: periodBookings.length,
+    attended: periodBookings.filter(b => b.status === "attended").length,
+    missed: periodBookings.filter(b => b.status === "missed").length,
+    bought: periodBookings.filter(b => b.bought).length
+  };
+
+  summary.innerHTML = `
+    <div class="stat-card">
+      <div class="stat-label">Всего</div>
+      <div class="stat-value">${totals.total}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Посещено</div>
+      <div class="stat-value success">${totals.attended}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Пропущено</div>
+      <div class="stat-value danger">${totals.missed}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Покупки</div>
+      <div class="stat-value warning">${totals.bought}</div>
+    </div>
+  `;
+
+  if (periodBookings.length === 0) {
+    list.innerHTML = `<tr><td colspan="5">Нет данных за выбранный период</td></tr>`;
+    return;
+  }
+
+  let grouped = new Map();
+  if (period === "day") {
+    periodBookings.forEach(b => {
+      const dt = new Date(b.date);
+      const key = dt.toLocaleDateString('ru-RU', { day:'numeric', month:'short' });
+      const entry = grouped.get(key) || { total:0, attended:0, missed:0, bought:0 };
+      entry.total += 1;
+      if (b.status === "attended") entry.attended += 1;
+      if (b.status === "missed") entry.missed += 1;
+      if (b.bought) entry.bought += 1;
+      grouped.set(key, entry);
+    });
+  } else if (period === "week") {
+    periodBookings.forEach(b => {
+      const dt = new Date(b.date);
+      const key = dt.toLocaleDateString('ru-RU', { weekday:'short', day:'numeric', month:'short' });
+      const entry = grouped.get(key) || { total:0, attended:0, missed:0, bought:0 };
+      entry.total += 1;
+      if (b.status === "attended") entry.attended += 1;
+      if (b.status === "missed") entry.missed += 1;
+      if (b.bought) entry.bought += 1;
+      grouped.set(key, entry);
+    });
+  } else {
+    periodBookings.forEach(b => {
+      const dt = new Date(b.date);
+      const key = dt.toLocaleDateString('ru-RU', { day:'numeric', month:'short' });
+      const entry = grouped.get(key) || { total:0, attended:0, missed:0, bought:0 };
+      entry.total += 1;
+      if (b.status === "attended") entry.attended += 1;
+      if (b.status === "missed") entry.missed += 1;
+      if (b.bought) entry.bought += 1;
+      grouped.set(key, entry);
+    });
+  }
+
+  const rows = Array.from(grouped.entries()).map(([label, v]) => {
+    return `
+      <tr>
+        <td>${label}</td>
+        <td>${v.total}</td>
+        <td>${v.attended}</td>
+        <td>${v.missed}</td>
+        <td>${v.bought}</td>
+      </tr>
+    `;
+  }).join("");
+
+  list.innerHTML = rows;
 }
 
 // ============ ОБРАБОТЧИКИ ФОРМ ============
@@ -646,7 +969,7 @@ document.querySelector("#booking-form").onsubmit = async (e) => {
   if (!user || !user.id) {
     showToast("Войдите в систему!", "danger");
     showAuthModal();
-    document.querySelector(".container").style.filter = "blur(8px)";
+    setBlur(true);
     return;
   }
   
@@ -664,7 +987,7 @@ document.querySelector("#booking-form").onsubmit = async (e) => {
       phone: phone,
       date: `${date}T${time}`,
       bought: document.querySelector("#bought-check").checked ? 1 : 0,
-      createdBy: user.id
+      created_by: user && user.id ? user.id : null
     });
     
     showToast("✅ Запись успешно создана!", "success");
@@ -689,7 +1012,50 @@ document.querySelector("#booking-form").onsubmit = async (e) => {
 document.addEventListener('DOMContentLoaded', () => {
   init();
   if (getUser()) load();
+
+  const scheduleInput = document.getElementById("schedule-date");
+  const scheduleToday = document.getElementById("schedule-today");
+  if (scheduleInput) {
+    scheduleInput.addEventListener("change", () => {
+      updateScheduleLabel(scheduleInput.value);
+      renderSchedule(scheduleInput.value, window.__BOOKINGS_CACHE || []);
+    });
+  }
+  if (scheduleToday && scheduleInput) {
+    scheduleToday.addEventListener("click", () => {
+      scheduleInput.value = new Date().toISOString().split("T")[0];
+      updateScheduleLabel(scheduleInput.value);
+      renderSchedule(scheduleInput.value, window.__BOOKINGS_CACHE || []);
+    });
+  }
   
+  // Навигация по боковому меню (визуальная активность)
+  document.querySelectorAll(".nav-item").forEach(item => {
+    item.addEventListener("click", () => {
+      const view = item.getAttribute("data-view");
+      document.querySelectorAll(".nav-item").forEach(i => i.classList.remove("active"));
+      item.classList.add("active");
+
+      document.querySelectorAll("[data-view]").forEach(section => {
+        if (section.classList.contains("nav-item")) return;
+        section.style.display = section.getAttribute("data-view") === view ? "block" : "none";
+      });
+
+      if (view === "reports") {
+        const period = document.querySelector("[data-report].active")?.getAttribute("data-report") || "day";
+        renderReports(period, window.__BOOKINGS_CACHE || []);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-report]").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll("[data-report]").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      renderReports(chip.getAttribute("data-report"), window.__BOOKINGS_CACHE || []);
+    });
+  });
+
   // Горячие клавиши
   document.addEventListener('keydown', (e) => {
     // Ctrl+K - фокус на поиск
